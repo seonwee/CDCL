@@ -30,8 +30,9 @@ struct clause {
 	uint score;
 	int flag;
 };
-const uint UnitRunFactor = 10;
-const double DecayFactor = 0.90;
+const uint UNIT_RUN_FACTOR = 16;
+const double DECAY_FACTOR = 0.9;
+const double ACTIVITY_RESCALE_LIMIT = 1e100;
 uint N;//变元的个数
 uint M;//子句的个数
 vector<vector<int>> F;
@@ -44,7 +45,7 @@ vector<int> decision;//decision[i]表示第i决策层的决策变元
 vector<uint> level;//level[i]表示变元i所在的第几决策层
 vector<clause*> reason;//reason[i]表示变元i的值是由哪个子句推导出来的
 vector<int> trail;
-vector<uint> activity;//VSIDS策略，activity[i]表示变元i的计数值，初始为0
+vector<double> activity;//EVSIDS策略，activity[i]表示变元i的得分，初始为0
 vector<uint> heap;//priority queue，heap[1]是堆顶元素，heap[0]不使用
 vector<uint> heap_idx;//heap_idx[i]表示变元i在heap中的下标，其值0表示变元i不在heap中
 vector<uchar> assign;//assign[i]表示变元i的赋值情况，以及记录变元i上一次赋值的情况
@@ -56,11 +57,11 @@ uint count_reduce;//指此次子句删除之前已经执行的子句删除的次数
 uint total_conflict;//总共冲突次数
 uint count_restart;//重启次数
 uint luby_idx;
-uint threshold_value_restart;
+uint threshold_value_restart;//根据timer_restart的值判断是否达到重启阈值
 uint timer_restart;
 uint count_simplify;
 array<int, 2> luby_seq{ 1, 1 };
-
+double activity_increment = 1.0;
 bool is_assigned(uint var) {
 	return assign[var] & ASSIGNED;
 }
@@ -178,10 +179,12 @@ void readCNF(string cnfFileName) {
 	}
 	scanf_s(" cnf %d %d", &N, &M);
 	F.resize(M);
+	//activity.resize(N + 1);
 	for (vector<int>& c : F) {
 		int lit;
 		while (scanf_s("%d", &lit), lit != 0) {
 			c.push_back(lit);
+			//activity[abs(lit)]++;
 		}
 	}
 }
@@ -263,10 +266,18 @@ clause* unit_propagate() {
 }
 
 void update_activity(uint var) {
-	activity[var] = (activity[var] + total_conflict) >> 1;
+	activity[var] += activity_increment;
+	if (activity[var] > ACTIVITY_RESCALE_LIMIT) {
+		activity_increment *= (1.0 / ACTIVITY_RESCALE_LIMIT);
+		for (uint v = 1; v <= N; ++v)
+			activity[v] *= (1.0 / ACTIVITY_RESCALE_LIMIT);
+	}
 	if (heap_idx[var]) {
 		heap_up(heap_idx[var]);
 	}
+}
+inline void update_activity_increment() {
+	activity_increment *= (1.0 / DECAY_FACTOR);
 }
 uint get_back_level() {
 	uint back_level = 0;
@@ -365,44 +376,14 @@ void analyze_conflict(clause* conflict) {
 	for (int i = 1; i < learn_clause.size(); i++) {
 		visited[abs(learn_clause[i])] = false;
 	}
-	for (bool b : visited) {
+	/*for (bool b : visited) {
 		if (b) {
 			cout << "has true not clear" << endl;
 		}
-	}
-	/*int uip = decision[decision_level];
-	int uip_idx = 0;
-	for (int i = trail.size() - 1; i >= 0; i--) {
-		if (trail[i] != 0 && trail[i] == uip) {
-			uip_idx = i;
-			break;
-		}
-	}
-	for (int i = uip_idx + 1; i < trail.size(); i++) {
-		int lit = trail[i];
-		uint var = abs(lit);
-		clause* c = reason[var];
-		if (c) {
-			for (int j = 1; j < c->num_lit; j++) {
-				int l = c->lits[j];
-				uint v = abs(l);
-				if (level[v] < decision_level && !visited[v]) {
-					visited[v] = true;
-					learn_clause.push_back(l);
-				}
-			}
-
-		}
-	}
-	learn_clause[0] = -uip;
-	for (int i = 1; i < learn_clause.size(); i++) {
-		visited[abs(learn_clause[i])] = false;
 	}*/
-
 	uint back_level = get_back_level();
 	backjump(back_level);
 	if (learn_clause.size() == 1) {
-		cout << back_level << endl;
 		push_trail(-uip, nullptr);
 	}
 	else {
@@ -475,27 +456,8 @@ int luby() {
 void restart() {
 	if (timer_restart < threshold_value_restart) return;
 	count_restart++;
-	while (threshold_value_restart < timer_restart)
-		threshold_value_restart = luby() * UnitRunFactor;
+	threshold_value_restart = luby() * UNIT_RUN_FACTOR;
 	timer_restart = 0;
-	/*uint next_var;
-	while (1) {
-		if (heap_empty())
-			return false;
-		next_var = heap_top();
-		if (!is_assigned(next_var))
-			break;
-		heap_pop();
-	}
-	auto next_activity = activity[next_var];
-	for (uint level = 0; level < decision_level; ++level) {
-		uint var = abs(decision[level + 1]);
-		if (activity[var] < next_activity) {
-			backjump(level);
-			return true;
-		}
-	}
-	return false;*/
 	backjump(0);
 }
 void simplify() {
@@ -532,6 +494,7 @@ void simplify() {
 	clauses.resize(new_size);
 	num_clauses = new_size;
 }
+
 bool solve() {
 	//initialize
 	pos_list.resize(N + 1);
@@ -554,7 +517,7 @@ bool solve() {
 	total_conflict = 0;
 	count_restart = 0;
 	luby_idx = 0;
-	threshold_value_restart = UnitRunFactor;
+	threshold_value_restart = UNIT_RUN_FACTOR;
 	timer_restart = 0;
 	count_simplify = 0;
 	for (uint i = 1; i <= N; i++) {
@@ -620,10 +583,11 @@ bool solve() {
 			timer_decay++;
 			total_conflict++;
 			timer_restart++;
+			update_activity_increment();
 			if (timer_decay == 800) {
 				timer_decay = 0;
 				for (int i = 1; i < activity.size(); i++) {
-					activity[i] = static_cast<int>(static_cast<double>(activity[i]) * DecayFactor);
+					activity[i] = static_cast<int>(static_cast<double>(activity[i]) * DECAY_FACTOR);
 					//activity[i] = activity[i] >> 1;
 				}
 			}			
@@ -657,8 +621,8 @@ int main(int argc, char* argv[]) {
 	auto duration = chrono::duration_cast<chrono::milliseconds>(stop - start);
 	double time = duration.count() / 1000.0;
 	Json::Value root;
-	uint max_num = 0;
-	for (uint& num : activity) {
+	double max_num = 0;
+	for (double& num : activity) {
 		max_num = max(max_num, num);
 	}
 	root["instance"] = cnfFileName;
@@ -669,6 +633,7 @@ int main(int argc, char* argv[]) {
 	root["count_reduce"] = count_reduce;
 	root["threshold_value_restart"] = threshold_value_restart;
 	root["count_simplify"] = count_simplify;
+	root["count_restart"] = count_restart;
 	cout << "over" << endl;
 	cout << root.toStyledString();
 }
