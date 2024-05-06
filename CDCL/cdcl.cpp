@@ -14,7 +14,6 @@ typedef unsigned char uchar;
 //每个变元对应两个文字：一个是变元本身（正向文字），另一个是其否定（负向文字）
 //故lit代表文字（包含正文字和负文字），var代表变元，lit=var表示正文字，lit=-var表示负文字
 
-
 enum {
 	CLAUSE_DEFAULT = 0,
 	CLAUSE_LEARNT = 1,
@@ -31,8 +30,9 @@ struct clause {
 	int flag;
 };
 const uint UNIT_RUN_FACTOR = 16;
-const double DECAY_FACTOR = 0.9;
+const double DECAY_FACTOR = 0.8;
 const double ACTIVITY_RESCALE_LIMIT = 1e100;
+const uint LIMIT_DECAY = 2048;
 uint N;//变元的个数
 uint M;//子句的个数
 vector<vector<int>> F;
@@ -296,7 +296,6 @@ void backjump(uint back_level) {
 }
 
 void analyze_conflict(clause* conflict) {
-
 	uint count = 0;//从后往前遍历迹，记录迹中还剩多少个>=decision_level的变元
 	int uip = 0;
 	learn_clause.push_back(0);
@@ -584,10 +583,10 @@ bool solve() {
 			total_conflict++;
 			timer_restart++;
 			update_activity_increment();
-			if (timer_decay == 800) {
+			if (timer_decay == LIMIT_DECAY) {
 				timer_decay = 0;
 				for (int i = 1; i < activity.size(); i++) {
-					activity[i] = static_cast<int>(static_cast<double>(activity[i]) * DECAY_FACTOR);
+					activity[i] *= DECAY_FACTOR;
 					//activity[i] = activity[i] >> 1;
 				}
 			}			
@@ -634,6 +633,9 @@ int main(int argc, char* argv[]) {
 	root["threshold_value_restart"] = threshold_value_restart;
 	root["count_simplify"] = count_simplify;
 	root["count_restart"] = count_restart;
+	root["UNIT_RUN_FACTOR"] = UNIT_RUN_FACTOR;
+	root["DECAY_FACTOR"] = DECAY_FACTOR;
+	root["LIMIT_DECAY"] = LIMIT_DECAY;
 	cout << "over" << endl;
 	cout << root.toStyledString();
 }
