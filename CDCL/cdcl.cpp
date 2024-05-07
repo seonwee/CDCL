@@ -62,6 +62,8 @@ uint timer_restart;
 uint count_simplify;
 array<int, 2> luby_seq{ 1, 1 };
 double activity_increment = 1.0;
+vector<uint> track;
+vector<vector<uint>> tracks;
 bool is_assigned(uint var) {
 	return assign[var] & ASSIGNED;
 }
@@ -294,11 +296,70 @@ void backjump(uint back_level) {
 		decision_level--;
 	}
 }
+void dfs_for_uip_non_recursion(uint var, vector<uint>& track, vector<vector<uint>>& tracks) {
+	track.push_back(var);
+
+	while (!track.empty()) {
+		uint current_var = track.back();
+		track.pop_back();
+
+		if (level[current_var] < decision_level) continue;
+
+		track.push_back(current_var);
+		visited[current_var] = true;
+		clause* c = reason[current_var];
+
+		if (c) {
+			bool all_parents_visited = true;
+
+			for (int i = 0; i < c->num_lit; i++) {
+				uint parent_var = abs(c->lits[i]);
+
+				if (level[parent_var] == decision_level && !visited[parent_var]) {
+					track.push_back(parent_var);
+					all_parents_visited = false;
+					break;
+				}
+			}
+
+			if (all_parents_visited) {
+				visited[current_var] = false;
+				track.pop_back();
+			}
+		}
+		else {
+			tracks.push_back(track);
+			visited[current_var] = false;
+			track.pop_back();
+		}
+	}
+}
+void dfs_for_uip(uint var) {
+	if (level[var] < decision_level) return;
+	track.push_back(var);
+	visited[var] = true;
+	clause* c = reason[var];
+	if (c) {
+		for (int i = 0; i < c->num_lit; i++) {
+			uint parent_var = abs(c->lits[i]);
+			if (level[parent_var] == decision_level && !visited[parent_var]) {
+				dfs_for_uip(parent_var);
+			}
+		}
+	}
+	else {
+		tracks.push_back(track);
+	}
+	visited[var] = false;
+	track.pop_back();
+}
+
 
 void analyze_conflict(clause* conflict) {
-	uint count = 0;//从后往前遍历迹，记录迹中还剩多少个>=decision_level的变元
+	//uint count = 0;//从后往前遍历迹，记录迹中还剩多少个>=decision_level的变元
 	int uip = 0;
 	learn_clause.push_back(0);
+	//==================================
 	/*cout << "conflict_clause:" << endl;
 	for (int i = 0; i < conflict->num_lit; i++) {
 		cout << conflict->lits[i] << "@" << level[abs(conflict->lits[i])] << " ";
@@ -321,65 +382,77 @@ void analyze_conflict(clause* conflict) {
 		if (trail[i] == 0) continue;
 		cout << trail[i] << " <-> " << level[abs(trail[i])] << endl;
 	}*/
-	for (int i = 0; i < conflict->num_lit; i++) {
+	//=====================================
+	/*vector<uint> track;
+	track.reserve(100);
+	vector<vector<uint>> tracks;
+	tracks.reserve(conflict->num_lit * 2);*/
+	for (uint i = 0; i < conflict->num_lit; i++) {
+		uint var = abs(conflict->lits[i]);
+		if (level[var] == decision_level) {
+			dfs_for_uip(var);
+		}
+	}
+	for (uint i = 0; i < conflict->num_lit; i++) {
 		int lit = conflict->lits[i];
 		uint var = abs(lit);
-		uint lv = level[var];
-		if (lv == 0) continue;
-		visited[var] = true;
-		if (lv < decision_level) {
+		if (!visited[var] && level[var] != 0 && level[var] < decision_level) {
 			learn_clause.push_back(lit);
+			visited[var] = true;
+		}
+	}
+	while (!tracks[0].empty()) {
+		uint var = tracks[0].back();
+		bool is_uip = true;
+		for (int i = 1; i < tracks.size(); i++) {
+			if (tracks[i].empty()) {
+				is_uip = false;
+				break;
+			}
+			else {
+				if (tracks[i].back() != var) {
+					is_uip = false;
+					break;
+				}
+				else
+					tracks[i].pop_back();
+			}
+		}
+		if (is_uip) {
+			uip = ev(var);
+			tracks[0].pop_back();
 		}
 		else {
-			count++;
-		}
-		update_activity(var);
-	}
-	for (int i = trail.size() - 1; i >= 0; i--) {
-		int lit = trail[i];
-		uint var = abs(lit);
-		if (!visited[var]) continue;
-		visited[var] = false;
-		count--;
-		if (count == 0) {
-			uip = lit;
 			break;
-		}
-		clause* c = reason[var];
-		if (c) {
-			for (uint j = 0; j < c->num_lit; j++) {
-				int l = c->lits[j];
-				uint v = abs(l);
-				uint lv = level[v];
-				if (visited[v] || lv == 0 || l == lit) continue;
-				visited[v] = true;
-				if (lv < decision_level) {
-					learn_clause.push_back(l);
-				}
-				else {
-					count++;
-				}
-				update_activity(v);
-			}
-
 		}
 	}
 	learn_clause[0] = -uip;
-
+	for (const vector<uint>& t : tracks) {
+		for (const uint& var : t) {
+			clause* c = reason[var];
+			if (c) {
+				for (uint i = 0; i < c->num_lit; i++) {
+					int lit = c->lits[i];
+					uint var = abs(lit);
+					if (!visited[var] && level[var] != 0 && level[var] < decision_level) {
+						learn_clause.push_back(lit);
+						visited[var] = true;
+					}
+				}
+			}
+		}
+	}
+	track.clear();
+	tracks.clear();
 	/*cout << "learn_clause:" << endl;
 	for (const int& lit : learn_clause) {
 		cout << lit << " ";
 	}
 	cout << endl;*/
-
+	//==================================================
 	for (int i = 1; i < learn_clause.size(); i++) {
 		visited[abs(learn_clause[i])] = false;
 	}
-	/*for (bool b : visited) {
-		if (b) {
-			cout << "has true not clear" << endl;
-		}
-	}*/
 	uint back_level = get_back_level();
 	backjump(back_level);
 	if (learn_clause.size() == 1) {
@@ -449,7 +522,7 @@ int luby() {
 	luby_seq = {
 		(luby_seq[0] & -luby_seq[0]) == luby_seq[1] ? luby_seq[0] + 1 : luby_seq[0],
 		(luby_seq[0] & -luby_seq[0]) == luby_seq[1] ? 1 : 2 * luby_seq[1]
-			};
+	};
 	return luby_seq[1];
 }
 void restart() {
@@ -519,6 +592,8 @@ bool solve() {
 	threshold_value_restart = UNIT_RUN_FACTOR;
 	timer_restart = 0;
 	count_simplify = 0;
+	track.reserve(200);
+	tracks.reserve(100);
 	for (uint i = 1; i <= N; i++) {
 		heap_push(i);
 	}
@@ -589,7 +664,7 @@ bool solve() {
 					activity[i] *= DECAY_FACTOR;
 					//activity[i] = activity[i] >> 1;
 				}
-			}			
+			}
 		}
 		restart();
 		if (!decide()) return true;
@@ -611,8 +686,8 @@ std::string toString(const Json::Value& val) {
 		return stream.str();
 }
 int main(int argc, char* argv[]) {
-	//string cnfFileName = "D:/SAT/instances/Beijing/2bitadd_10.cnf";
-	string cnfFileName = argv[1];
+	string cnfFileName = "D:/SAT/instances/Beijing/4blocksb.cnf";
+	//string cnfFileName = argv[1];
 	readCNF(cnfFileName);
 	auto start = chrono::high_resolution_clock::now();
 	bool result = solve();
